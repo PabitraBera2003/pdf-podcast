@@ -2,6 +2,7 @@ import os
 import uuid
 import fitz
 import asyncio
+import time
 import edge_tts
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, UploadFile, File, HTTPException
@@ -23,7 +24,7 @@ client = Groq(api_key=GROQ_API_KEY)
 # -------------------------
 # FastAPI App
 # -------------------------
-app = FastAPI(title="PDF to Podcast Service")
+app = FastAPI(title="PDF to Podcast Service (Large Book Edition)")
 
 app.add_middleware(
     CORSMiddleware,
@@ -51,19 +52,75 @@ def extract_text(pdf_path):
     return text.strip()
 
 # -------------------------
-# Generate Podcast Script
+# Text Chunking (with overlap)
+# -------------------------
+def chunk_text(text, chunk_size=3000, overlap=500):
+    """Splits text into word chunks with a specified overlap."""
+    words = text.split()
+    chunks = []
+    i = 0
+    while i < len(words):
+        chunk = " ".join(words[i:i + chunk_size])
+        chunks.append(chunk)
+        i += (chunk_size - overlap)
+    return chunks
+
+# -------------------------
+# Generate Podcast Script (Map-Reduce)
 # -------------------------
 def generate_script(text):
-    # Limit input to avoid overflow
-    text = text[:12000]
+    print("Starting chunking process...")
+    chunks = chunk_text(text, chunk_size=3000, overlap=500)
+    extracted_points = []
 
-    response = client.chat.completions.create(
+    # STEP 1: MAP (Extract facts from each chunk)
+    print(f"Extracting key points from {len(chunks)} chunks...")
+    for index, chunk in enumerate(chunks):
+        print(f"Processing chunk {index + 1}/{len(chunks)}...")
+        try:
+            response = client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a meticulous researcher. Extract the core arguments, major plot points, "
+                            "and key concepts from the following text. Be highly concise but do not lose crucial details. "
+                            "Use bullet points."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": chunk,
+                    },
+                ],
+                temperature=0.3, # Lower temperature for factual extraction
+                max_tokens=800,
+            )
+            extracted_points.append(response.choices[0].message.content)
+            
+            # Pause to avoid hitting Groq API rate limits (Tokens Per Minute)
+            time.sleep(2) 
+            
+        except Exception as e:
+            print(f"Error processing chunk {index + 1}: {e}")
+            continue
+
+    # Combine all extracted points
+    combined_extractions = "\n\n".join(extracted_points)
+    
+    # If the combined extraction is incredibly long, we might need to truncate it slightly, 
+    # but Llama 3.1 8B handles up to 128k tokens, so we should be safe here.
+
+    # STEP 2: REDUCE (Generate the final podcast script)
+    print("Generating final podcast script...")
+    final_response = client.chat.completions.create(
         model="llama-3.1-8b-instant",
         messages=[
             {
                 "role": "system",
                 "content": (
-                    "You are a SOLO expert podcast narrator. Summarize the content into a structured solo speech podcast script. "
+                    "You are a SOLO expert podcast narrator. Summarize the provided book notes into a structured solo speech podcast script. "
                     "Speak entirely in the first-person as ONE single continuous narrator. "
                     "CRITICAL: DO NOT include guests, co-hosts, or an interview format. "
                     "DO NOT use labels like 'Host:', 'Guest:', 'Speaker 1:', or 'Narrator:'. It must be a continuous single-voice monologue."
@@ -71,14 +128,14 @@ def generate_script(text):
             },
             {
                 "role": "user",
-                "content": text,
+                "content": combined_extractions,
             },
         ],
         temperature=0.7,
-        max_tokens=1500,
+        max_tokens=2500, # Increased to allow for a slightly longer, richer podcast
     )
 
-    script = response.choices[0].message.content
+    script = final_response.choices[0].message.content
 
     # Clean script for TTS
     script = script.replace("*", "").replace("#", "")
@@ -88,6 +145,7 @@ def generate_script(text):
 # Generate Audio with Edge TTS
 # -------------------------
 async def generate_audio(script):
+    print("Generating audio...")
     audio_filename = f"{uuid.uuid4()}.mp3"
     audio_path = f"generated_audio/{audio_filename}"
 
