@@ -21,6 +21,20 @@ client = Groq(api_key=GROQ_API_KEY)
 
 app = FastAPI(title="PDF to Podcast Service (Large Book Edition)")
 
+@app.get("/")
+async def root():
+    return {
+        "status": True,
+        "message": "PDF to Podcast API is running"
+    }
+
+
+@app.get("/health")
+async def health_check():
+    return {
+        "status": "healthy"
+    }
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
