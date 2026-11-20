@@ -153,9 +153,6 @@ Then display them in the README:
 <img src="screenshots/home_page.jpeg" width="220">
 <img src="screenshots/podcast_page.jpeg" width="220">
 <img src="screenshots/transcript_page.jpeg" width="220">
-
-<br><br>
-
 <img src="screenshots/transcript_pdf.jpeg" width="220">
 
 </div>
